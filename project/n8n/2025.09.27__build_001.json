@@ -1,0 +1,469 @@
+{
+  "name": "Twilio → n8n (De-dupe, HubSpot new/update, Email every message)",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "twilio/inbound-sms",
+        "httpMethod": "POST",
+        "responseMode": "lastNode",
+        "options": {
+          "binaryData": false
+        }
+      },
+      "id": "Webhook_Inbound",
+      "name": "Webhook: Twilio Inbound SMS",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        -760,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const src = ($json.body && typeof $json.body === 'object' && Object.keys($json.body).length) ? $json.body : $json;\nconst from = (src.From || '').trim();\nconst to = (src.To || '').trim();\nconst text = (src.Body || '').trim();\nconst rawSid = (src.MessageSid || src.SmsMessageSid || src.SmsSid || '').toString().trim();\nconst sid = rawSid.toUpperCase().replace(/[^A-Z0-9]/g, '');\nconst sidValid = /^SM[A-F0-9]{32}$/.test(sid);\nconst numMedia = parseInt(src.NumMedia || '0', 10) || 0;\nconst media = [];\nfor (let i = 0; i < numMedia; i++) { const u = src[`MediaUrl${i}`]; if (u) media.push(u); }\nconst received = new Date().toISOString();\nlet note = `**Inbound SMS**\\n\\n**From:** ${from}\\n**To:** ${to}\\n**MessageSid:** ${sid || rawSid}\\n**Received:** ${received}\\n\\n**Body:**\\n${text || \"_(empty)\"}\\n`;\nif (media.length) { note += `\\n**Media (${media.length}):**\\n` + media.map((m, i) => `- [Media ${i+1}](${m})`).join('\\n'); }\nfunction djb2(str){let h=5381;for(let i=0;i<str.length;i++)h=((h<<5)+h)+str.charCodeAt(i);return (h>>>0).toString(16).toUpperCase();}\nconst fallback = `FALLBACK-${djb2(JSON.stringify({From:from,To:to,Body:text,NumMedia:numMedia}))}`;\nconst dedupeKey = sid ? sid : fallback;\nreturn [{ json: { ...$json, ...src, from, to, text, sid, sidValid, dedupeKey, media, hasMedia: media.length>0, received, noteBody: note } }];"
+      },
+      "id": "Code_Normalize",
+      "name": "Code: Normalize + Dedupe Key",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -520,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const store = $getWorkflowStaticData('global');\nif (!store.processed) store.processed = {};\nconst key = $json.dedupeKey;\nconst duplicate = !!store.processed[key];\nreturn [{ json: { ...$json, duplicate } }];"
+      },
+      "id": "Code_CheckDup",
+      "name": "Code: Check Duplicate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -300,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.duplicate}}"
+            }
+          ]
+        }
+      },
+      "id": "IF_Duplicate",
+      "name": "IF: Duplicate?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -80,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "statusCode": 200,
+        "options": {
+          "responseData": "{\"ok\":true,\"deduped\":true}"
+        }
+      },
+      "id": "Respond_Deduped",
+      "name": "Respond 200 (deduped)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        150,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const store = $getWorkflowStaticData('global');\nif (!store.processed) store.processed = {};\nstore.processed[$json.dedupeKey] = { at: new Date().toISOString(), from: $json.From, to: $json.To };\nreturn [{ json: $json }];"
+      },
+      "id": "Code_Remember",
+      "name": "Code: Remember Key",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        150,
+        -160
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://api.hubapi.com/crm/v3/objects/contacts/search",
+        "responseFormat": "json",
+        "jsonParameters": true,
+        "options": {
+          "headerParametersUi": {
+            "parameter": [
+              {
+                "name": "Authorization",
+                "value": "Bearer REPLACE_WITH_HUBSPOT_PRIVATE_APP_TOKEN"
+              },
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        },
+        "sendBody": true,
+        "bodyParametersJson": "{\"filterGroups\":[{\"filters\":[{\"propertyName\":\"phone\",\"operator\":\"EQ\",\"value\":\"{{$json.From}}\"}]},{\"filters\":[{\"propertyName\":\"mobilephone\",\"operator\":\"EQ\",\"value\":\"{{$json.From}}\"}]}],\"properties\":[\"firstname\",\"lastname\",\"phone\",\"mobilephone\"]}",
+        "method": "POST"
+      },
+      "id": "HTTP_HS_Search",
+      "name": "HubSpot (HTTP): Search Contact by Phone",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        370,
+        -160
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const res = $json; let contactId = null; let isNew = false;\nif (res && res.total && Array.isArray(res.results) && res.results.length > 0) { contactId = res.results[0].id; } else { isNew = true; }\nreturn [{ json: { ...$json, contactId, isNew } }];"
+      },
+      "id": "Code_MapSearch",
+      "name": "Code: Map HS Search → contactId/isNew",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        590,
+        -160
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.isNew}}"
+            }
+          ]
+        }
+      },
+      "id": "IF_IsNew",
+      "name": "IF: New Number?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        810,
+        -160
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://api.hubapi.com/crm/v3/objects/contacts",
+        "responseFormat": "json",
+        "jsonParameters": true,
+        "options": {
+          "headerParametersUi": {
+            "parameter": [
+              {
+                "name": "Authorization",
+                "value": "Bearer REPLACE_WITH_HUBSPOT_PRIVATE_APP_TOKEN"
+              },
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        },
+        "sendBody": true,
+        "bodyParametersJson": "{\"properties\":{\"phone\":\"{{$json.From}}\",\"mobilephone\":\"{{$json.From}}\",\"firstname\":\"SMS\",\"lastname\":\"Lead\",\"lifecyclestage\":\"lead\"}}",
+        "method": "POST"
+      },
+      "id": "HTTP_HS_Create",
+      "name": "HubSpot (HTTP): Create Contact",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1030,
+        -300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const id = $json && $json.id ? $json.id : null;\nreturn [{ json: { ...$json, contactId: id } }];"
+      },
+      "id": "Code_MapCreate",
+      "name": "Code: Map HS Create → contactId",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1250,
+        -300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://api.hubapi.com/crm/v3/objects/contacts/{{$json.contactId}}",
+        "responseFormat": "json",
+        "jsonParameters": true,
+        "options": {
+          "headerParametersUi": {
+            "parameter": [
+              {
+                "name": "Authorization",
+                "value": "Bearer REPLACE_WITH_HUBSPOT_PRIVATE_APP_TOKEN"
+              },
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        },
+        "sendBody": true,
+        "bodyParametersJson": "{\"properties\":{\"mobilephone\":\"{{$json.From}}\"}}",
+        "method": "PATCH"
+      },
+      "id": "HTTP_HS_Update",
+      "name": "HubSpot (HTTP): Update Contact (existing)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1030,
+        -20
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "note",
+        "operation": "create",
+        "additionalFields": {
+          "engagementBody": "={{$json.noteBody}}",
+          "associations": {
+            "contacts": [
+              "={{$json.contactId}}"
+            ]
+          }
+        }
+      },
+      "id": "HS_CreateNote",
+      "name": "HubSpot: Create Note",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 2,
+      "position": [
+        1470,
+        -160
+      ],
+      "credentials": {
+        "hubspotApi": {
+          "id": "REPLACE_WITH_YOUR_HUBSPOT_CREDENTIAL_ID",
+          "name": "HubSpot Private App"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "noreply@furniturehogs.com",
+        "toEmail": "sales@furniturehogs.com",
+        "subject": "Inbound SMS/MMS: {{$json.From}} → {{$json.To}}",
+        "text": "New inbound message captured.\\n\\nFrom: {{$json.From}}\\nTo: {{$json.To}}\\nMessageSid: {{$json.sid || $json.MessageSid}}\\nReceived: {{$json.received}}\\n\\nBody:\\n{{$json.Body || \"(empty)\"}}\\n\\nMedia (if any):\\n{{ $json.media && $json.media.length ? $json.media.join(\"\\n\") : \"None\" }}\\n\\nHubSpot Contact ID: {{$json.contactId || \"(pending)\"}}",
+        "options": {}
+      },
+      "id": "Email_Notify",
+      "name": "Email: Notify Sales (every message)",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [
+        1690,
+        -160
+      ]
+    },
+    {
+      "parameters": {
+        "statusCode": 200,
+        "options": {
+          "responseData": "{\"ok\":true}"
+        }
+      },
+      "id": "Respond_Success",
+      "name": "Respond 200 (success)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1910,
+        -160
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook: Twilio Inbound SMS": {
+      "main": [
+        [
+          {
+            "node": "Code: Normalize + Dedupe Key",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Normalize + Dedupe Key": {
+      "main": [
+        [
+          {
+            "node": "Code: Check Duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Check Duplicate": {
+      "main": [
+        [
+          {
+            "node": "IF: Duplicate?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: Duplicate?": {
+      "main": [
+        [
+          {
+            "node": "Respond 200 (deduped)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code: Remember Key",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Remember Key": {
+      "main": [
+        [
+          {
+            "node": "HubSpot (HTTP): Search Contact by Phone",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HubSpot (HTTP): Search Contact by Phone": {
+      "main": [
+        [
+          {
+            "node": "Code: Map HS Search → contactId/isNew",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Map HS Search → contactId/isNew": {
+      "main": [
+        [
+          {
+            "node": "IF: New Number?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: New Number?": {
+      "main": [
+        [
+          {
+            "node": "HubSpot (HTTP): Create Contact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "HubSpot (HTTP): Update Contact (existing)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HubSpot (HTTP): Create Contact": {
+      "main": [
+        [
+          {
+            "node": "Code: Map HS Create → contactId",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Map HS Create → contactId": {
+      "main": [
+        [
+          {
+            "node": "HubSpot: Create Note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HubSpot (HTTP): Update Contact (existing)": {
+      "main": [
+        [
+          {
+            "node": "HubSpot: Create Note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HubSpot: Create Note": {
+      "main": [
+        [
+          {
+            "node": "Email: Notify Sales (every message)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email: Notify Sales (every message)": {
+      "main": [
+        [
+          {
+            "node": "Respond 200 (success)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": {}
+}
