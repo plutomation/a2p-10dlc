@@ -1,0 +1,92 @@
+# -------- macOS junk --------
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# -------- Node / package managers --------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+package-lock.json
+# If you prefer to commit a specific lockfile, remove it above and keep your chosen one:
+# yarn.lock
+# pnpm-lock.yaml
+# bun.lockb
+
+# -------- Build & caches (React / frontend tooling) --------
+build/
+dist/
+.out/
+out/
+.temp/
+.tmp/
+.cache/
+.cache-loader/
+.eslintcache
+.stylelintcache
+.turbo/
+.turbopack/
+.parcel-cache/
+.vite/
+vite.svg
+coverage/
+.nyc_output/
+
+# -------- Framework-specific (include if applicable) --------
+# Next.js
+.next/
+.next-turbo/
+# Gatsby
+.public/
+.cache/
+# Remix
+.build/
+# Expo / React Native Web (optional for web projects)
+.expo/
+web-build/
+
+# -------- TypeScript --------
+*.tsbuildinfo
+
+# -------- Env & secrets --------
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+.env.test
+
+# -------- Editors & workspace --------
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# -------- Storybook --------
+storybook-static/
+.out-storybook/
+
+# -------- Testing tools --------
+jest-html-reporters-*.html
+jest-cache/
+jest/tmp/
+
+# -------- Misc cloud / platforms --------
+.vercel/
+.netlify/
+firebase-debug.log
+functions/node_modules/
+
+# -------- Images / design tools (optional) --------
+*.sketch
+*.fig
+*.psd
